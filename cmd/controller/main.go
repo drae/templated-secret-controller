@@ -145,7 +145,7 @@ func main() {
 	saLoader := generator.NewServiceAccountLoader(satoken.NewManager(coreClient, log.WithName("template")))
 
 	// Set SecretTemplate's maximum exponential to reduce reconcile time for inputresource errors
-	rateLimiter := workqueue.NewItemExponentialFailureRateLimiter(100*time.Millisecond, 120*time.Second)
+	rateLimiter := workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](100*time.Millisecond, 120*time.Second)
 	secretTemplateReconciler := generator.NewSecretTemplateReconciler(mgr, mgr.GetClient(), saLoader, tracker.NewTracker(), log.WithName("template"))
 
 	// Pass reconciliation settings to the reconciler
@@ -167,19 +167,14 @@ type reconcilerWithWatches interface {
 	AttachWatches(controller.Controller) error
 }
 
-func registerCtrlWithRateLimiter(desc string, mgr manager.Manager, reconciler reconcilerWithWatches, rateLimiter workqueue.RateLimiter) error {
+func registerCtrlWithRateLimiter(desc string, mgr manager.Manager, reconciler reconcilerWithWatches, rateLimiter workqueue.TypedRateLimiter[reconcile.Request]) error {
 	ctrlName := "ts-" + desc
-
-	// Create a custom adapter for the RateLimiter
-	adaptedRateLimiter := &typedRateLimiterAdapter{
-		RateLimiter: rateLimiter,
-	}
 
 	ctrlOpts := controller.Options{
 		Reconciler: reconciler,
 		// Default MaxConcurrentReconciles is 1. Keeping at that
 		// since we are not doing anything that we need to parallelize for.
-		RateLimiter: adaptedRateLimiter,
+		RateLimiter: rateLimiter,
 	}
 
 	ctrl, err := controller.New(ctrlName, mgr, ctrlOpts)
@@ -189,30 +184,10 @@ func registerCtrlWithRateLimiter(desc string, mgr manager.Manager, reconciler re
 
 	err = reconciler.AttachWatches(ctrl)
 	if err != nil {
-		return fmt.Errorf("%s: unable to attaches watches: %s", ctrlName, err)
+		return fmt.Errorf("%s: unable to attach watches: %s", ctrlName, err)
 	}
 
 	return nil
-}
-
-// typedRateLimiterAdapter adapts a generic RateLimiter to be used with specific types
-type typedRateLimiterAdapter struct {
-	workqueue.RateLimiter
-}
-
-// When implements TypedRateLimiter.When
-func (a *typedRateLimiterAdapter) When(item reconcile.Request) time.Duration {
-	return a.RateLimiter.When(item)
-}
-
-// Forget implements TypedRateLimiter.Forget
-func (a *typedRateLimiterAdapter) Forget(item reconcile.Request) {
-	a.RateLimiter.Forget(item)
-}
-
-// NumRequeues implements TypedRateLimiter.NumRequeues
-func (a *typedRateLimiterAdapter) NumRequeues(item reconcile.Request) int {
-	return a.RateLimiter.NumRequeues(item)
 }
 
 func exitIfErr(entryLog logr.Logger, desc string, err error) {
