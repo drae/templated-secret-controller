@@ -40,7 +40,9 @@ import (
 
 var (
 	// Version of templated-secret-controller is set via ldflags at build-time from most recent git tag
-	Version = "develop"
+	Version       = "develop"
+	VersionSuffix = "-dev"
+	Commit        = "unknown"
 
 	log                        = logf.Log.WithName("ts")
 	ctrlNamespace              = ""
