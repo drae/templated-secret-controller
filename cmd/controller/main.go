@@ -204,8 +204,8 @@ func waitForCRDs(restConfig *rest.Config, entryLog logr.Logger) error {
 	}
 
 	// First check that the CRD exists and is established
-	err = wait.PollImmediate(1*time.Second, 60*time.Second, func() (bool, error) {
-		crd, err := apiExtClient.ApiextensionsV1().CustomResourceDefinitions().Get(context.TODO(), "secrettemplates.templatedsecret.starstreak.dev", metav1.GetOptions{})
+	err = wait.PollUntilContextTimeout(context.TODO(), 1*time.Second, 60*time.Second, false, func(ctx context.Context) (bool, error) {
+		crd, err := apiExtClient.ApiextensionsV1().CustomResourceDefinitions().Get(ctx, "secrettemplates.templatedsecret.starstreak.dev", metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				entryLog.Info("SecretTemplate CRD not found, retrying...")
@@ -236,7 +236,7 @@ func waitForCRDs(restConfig *rest.Config, entryLog logr.Logger) error {
 	discoveryClient := apiExtClient.Discovery()
 	entryLog.Info("Verifying API resource is discoverable")
 
-	return wait.PollImmediate(1*time.Second, 30*time.Second, func() (bool, error) {
+	return wait.PollUntilContextTimeout(context.TODO(), 1*time.Second, 30*time.Second, false, func(ctx context.Context) (bool, error) {
 		resourceList, err := discoveryClient.ServerResourcesForGroupVersion("templatedsecret.starstreak.dev/v1alpha1")
 		if err != nil {
 			entryLog.Info("API resource not yet discoverable, waiting for API server discovery cache to refresh...",
