@@ -1,115 +1,86 @@
 # Makefile for templated-secret-controller
 
-# Image settings
-IMG ?= ghcr.io/drae/templated-secret-controller
-TAG ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-PLATFORMS ?= linux/amd64,linux/arm64
-# Allow skipping platform flags in environments that don't support it
-DOCKER_BUILD_PLATFORM_FLAGS ?= --platform=$(PLATFORMS)
+.DEFAULT_GOAL := build
 
-# Get the currently used golang install path (in GOPATH/bin)
-GOBIN=$(shell go env GOPATH)/bin
-CONTROLLER_GEN=$(GOBIN)/controller-gen
+OUT_DIR ?= build/
+
+# Image settings
+REPOSITORY_OWNER ?= drae
+REPOSITORY_NAME ?= templated-secret-controller
 
 # Build settings
+PLATFORMS ?= linux/amd64
 LDFLAGS := -ldflags="-X 'main.Version=$(TAG)' -buildid="
 BUILD_FLAGS := -trimpath -mod=vendor $(LDFLAGS)
-ENVTEST_K8S_VERSION = 1.27.1
 
-.PHONY: all
-all: build
-
-# Run tests
-.PHONY: test
-test:
-	NAMESPACE=templated-secret-dev go test ./... -coverprofile cover.out
-
-# Show test coverage details
-.PHONY: coverage
-coverage: test
-	go tool cover -func=cover.out
-
-# Show test coverage in browser
-.PHONY: coverage-html
-coverage-html: test
-	go tool cover -html=cover.out
-
-# Run tests with specific package path
-.PHONY: test-pkg
-test-pkg:
-	NAMESPACE=templated-secret-dev go test $(PKG) -coverprofile cover.out -v
-
-# Test coverage for each package
-.PHONY: coverage-by-pkg
-coverage-by-pkg:
-	@echo "Running tests and generating coverage by package..."
-	@for pkg in $$(go list ./... | grep -v "/vendor/" | grep -v "/test/ci"); do \
-		echo "Testing $$pkg"; \
-		NAMESPACE=templated-secret-dev go test -coverprofile=coverage.tmp $$pkg || exit 1; \
-		if [ -f coverage.tmp ]; then \
-			go tool cover -func=coverage.tmp | tail -n 1; \
-			rm coverage.tmp; \
-		fi; \
-	done
-
-# Run tests only for uncovered areas (less than 50% coverage)
-.PHONY: test-low-coverage
-test-low-coverage: coverage
-	@echo "Packages with coverage below 50%:"
-	@go tool cover -func=cover.out | grep -v "100.0%" | awk '$$3 < 50.0 {print $$1}'
-
-# Build the binary
-.PHONY: build
-build: fmt vet
-	go build $(BUILD_FLAGS) -o bin/controller ./cmd/controller/...
-
-# Run code generation
-.PHONY: generate
-generate: controller-gen
-	$(CONTROLLER_GEN) object:headerFile="code-header-template.txt" paths="./pkg/apis/..."
-
-# Run manifests generation
-.PHONY: manifests
-manifests: controller-gen
-	$(CONTROLLER_GEN) crd paths="./pkg/apis/templatedsecret/v1alpha1" output:crd:artifacts:config=config/kustomize/base/crds
-
-# Run fmt against code
-.PHONY: fmt
-fmt:
-	go fmt ./...
-
-# Run vet against code
-.PHONY: vet
-vet:
-	go vet ./...
-
-# Build the docker image
-.PHONY: docker-build
-docker-build:
-	docker buildx build $(DOCKER_BUILD_PLATFORM_FLAGS) --build-arg SGCTRL_VER=$(TAG) -t ${IMG}:${TAG} .
-
-# Push the docker image
-.PHONY: docker-push
-docker-push:
-	docker buildx build $(DOCKER_BUILD_PLATFORM_FLAGS) --build-arg SGCTRL_VER=$(TAG) -t ${IMG}:${TAG} --push .
 
 # Find or download controller-gen
-.PHONY: controller-gen
 controller-gen:
 ifeq (, $(shell which controller-gen))
 	@{ \
-	set -e; \
-	CONTROLLER_GEN_TMP_DIR=$$(mktemp -d); \
-	cd $$CONTROLLER_GEN_TMP_DIR; \
-	go mod init tmp; \
-	go get sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2; \
-	GOBIN=$(GOBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2; \
-	rm -rf $$CONTROLLER_GEN_TMP_DIR; \
+	set -e ;\
+	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2 ;\
 	}
+CONTROLLER_GEN=$(GOBIN)/controller-gen
+else
+CONTROLLER_GEN=$(shell which controller-gen)
 endif
 
-# Ensure vendor directory is up-to-date
-.PHONY: vendor
-vendor:
-	go mod vendor
-	go mod tidy
+
+# Compile binary
+fmt:
+	go fmt ./...
+
+vet:
+	go vet ./...
+
+build: fmt vet
+	go build $(BUILD_FLAGS) -o build/templated-secret-controller ./cmd/controller/...
+
+
+# Generate client code for CRDs
+client-gen:
+	@echo "=== Generating client code for CRDs ==="
+	@chmod +x hack/client-codegen.sh
+	@./hack/client-codegen.sh
+
+# Verify client code is up-to-date (for CI)
+verify-client-gen: client-gen
+	@echo "=== Verifying client code is up-to-date ==="
+	@if [ -n "$$(git status --porcelain pkg/client)" ]; then \
+		echo "Client code is not up-to-date, run 'make client-gen'"; \
+		git status --porcelain pkg/client; \
+		exit 1; \
+	fi
+
+
+# Code generation
+generate: controller-gen client-gen
+	$(CONTROLLER_GEN) object:headerFile="code-header-template.txt" paths="./pkg/apis/..."
+
+# Run manifests generation
+manifests: controller-gen
+	$(CONTROLLER_GEN) crd paths="./pkg/apis/templatedsecret/v1alpha1" output:crd:artifacts:config=config/kustomize/base/crds
+
+clean:
+	@rm -rf build
+	@go clean -cache
+
+
+# Run tests
+test:
+	NAMESPACE=templated-secret-dev go test ./... -coverprofile cover.out
+
+coverage: test
+	NAMESPACE=templated-secret-dev go tool cover -func=cover.out
+
+coverage-html: test
+	NAMESPACE=templated-secret-dev go tool cover -html=cover.out
+
+
+# Build the docker image
+docker-build:
+	REPOSITORY_OWNER=$(REPOSITORY_OWNER) REPOSITORY_NAME=$(REPOSITORY_NAME) goreleaser release --snapshot --clean --skip=publish,sign
+
+# Phony
+.PHONY : controller-gen fmt vet test coverage coverage-html build generate manifests docker-build client-gen verify-client-gen clean
