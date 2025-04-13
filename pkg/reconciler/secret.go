@@ -18,11 +18,22 @@ type Secret struct {
 }
 
 func NewSecret(owner metav1.Object, values map[string][]byte) *Secret {
+	labels := map[string]string{}
+
+	// Copy existing labels from the owner
+	if ownerLabels := owner.GetLabels(); ownerLabels != nil {
+		for k, v := range ownerLabels {
+			labels[k] = v
+		}
+	}
+
+	labels["templatedsecret.starstreak.dev/secrettemplate"] = owner.GetName()
+
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        owner.GetName(),
 			Namespace:   owner.GetNamespace(),
-			Labels:      owner.GetLabels(),
+			Labels:      labels,
 			Annotations: owner.GetAnnotations(),
 		},
 	}
