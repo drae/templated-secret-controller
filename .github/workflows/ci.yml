@@ -43,7 +43,7 @@ jobs:
 
       - name: Build controller binary
         run: |
-          CGO_ENABLED=0 go build -v -o templated-secret-controller \
+          CGO_ENABLED=0 go build -o templated-secret-controller \
             -ldflags "-s -w -X github.com/drae/templated-secret-controller/cmd/controller.Version=${TAG}" \
             ./cmd/controller/main.go
 
@@ -199,7 +199,7 @@ jobs:
 
           # Simple check for secret creation
           for i in {1..6}; do
-            if kubectl -n templated-secret get secrets -l "templatedsecret.starstreak.dev/secrettemplate" 2>/dev/null | grep -q "secret-"; then
+            if kubectl -n templated-secret get secrets -o json | jq '.items[] | select(.metadata.ownerReferences != null) | select(.metadata.ownerReferences[].kind == "SecretTemplate")' | grep -q "secret-"; then
               echo "✅ Secrets created successfully"
               break
             fi
@@ -211,11 +211,11 @@ jobs:
           done
 
           # Test upgrade and uninstall
-          helm upgrade test-controller charts/templated-secret-controller \
+          helm upgrade templated-secret-controller charts/templated-secret-controller \
             --set image.repository=${IMG} \
             --set image.tag=${TAG} \
             --set image.pullPolicy=IfNotPresent \
             --namespace templated-secret
 
-          helm uninstall test-controller --namespace templated-secret
+          helm uninstall templated-secret-controller --namespace templated-secret
           kubectl get crd secrettemplates.templatedsecret.starstreak.dev
