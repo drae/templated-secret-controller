@@ -1,5 +1,7 @@
 # templated-secret-controller
 
+[![codecov](https://codecov.io/gh/drae/templated-secret-controller/branch/main/graph/badge.svg?token=XCY5S8HZK1)](https://codecov.io/gh/drae/templated-secret-controller)
+
 A Kubernetes controller for generating secrets from existing resources.
 
 ## Overview
@@ -113,3 +115,7 @@ The project uses GitHub Actions for continuous integration and deployment:
 - CI workflow runs on PRs and pushes to main
 - Release workflow triggers on tags formatted as 'v*'
 - Images are published to GitHub Container Registry
+
+## Code Coverage
+
+<img src="https://codecov.io/gh/drae/templated-secret-controller/graphs/tree.svg?token=XCY5S8HZK1">
