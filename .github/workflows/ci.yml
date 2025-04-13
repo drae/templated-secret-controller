@@ -109,6 +109,8 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Download and load the Docker image
       - name: Download Docker image
@@ -176,25 +178,28 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Test Helm chart
         run: |
           # Create namespace and deploy
-          kubectl create namespace helm-test --dry-run=client -o yaml | kubectl apply -f -
-          helm install test-controller charts/templated-secret-controller \
+          kubectl create namespace templated-secret --dry-run=client -o yaml | kubectl apply -f -
+          helm install templated-secret-controller charts/templated-secret-controller \
             --set image.repository=${IMG} \
             --set image.tag=${TAG} \
-            --namespace helm-test
-          kubectl -n helm-test wait --for=condition=available \
+            --set image.pullPolicy=IfNotPresent \
+            --namespace templated-secret
+          kubectl -n templated-secret wait --for=condition=available \
             deployment -l app.kubernetes.io/name=templated-secret-controller --timeout=60s
 
           # Apply example resources and verify
-          kubectl -n helm-test apply -f examples/
+          kubectl -n templated-secret apply -f examples/
           kubectl wait --for=condition=established --timeout=30s crd/secrettemplates.templatedsecret.starstreak.dev
 
           # Simple check for secret creation
           for i in {1..6}; do
-            if kubectl -n helm-test get secrets -l "templatedsecret.starstreak.dev/secrettemplate" 2>/dev/null | grep -q "secret-"; then
+            if kubectl -n templated-secret get secrets -l "templatedsecret.starstreak.dev/secrettemplate" 2>/dev/null | grep -q "secret-"; then
               echo "✅ Secrets created successfully"
               break
             fi
@@ -209,8 +214,8 @@ jobs:
           helm upgrade test-controller charts/templated-secret-controller \
             --set image.repository=${IMG} \
             --set image.tag=${TAG} \
-            --set resources.limits.cpu=200m \
-            --namespace helm-test
+            --set image.pullPolicy=IfNotPresent \
+            --namespace templated-secret
 
-          helm uninstall test-controller --namespace helm-test
+          helm uninstall test-controller --namespace templated-secret
           kubectl get crd secrettemplates.templatedsecret.starstreak.dev
