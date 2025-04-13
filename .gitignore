@@ -10,5 +10,6 @@
 /.env
 /bin
 /cover.out
+/cover.txt
 /generate.out
 /build/
