@@ -6,6 +6,7 @@
 .idea
 /dist
 /.archive
+/.cache
 /.env
 /bin
 /cover.out
