@@ -2,9 +2,11 @@ name: Lint Helm Charts
 
 on:
   push:
-    branches: [master]
+    branches:
+      - main
   pull_request:
-    branches: [master]
+    branches:
+      - main
 
 permissions:
   contents: read # Needed for checkout and helm operations
