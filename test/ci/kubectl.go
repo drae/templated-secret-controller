@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 // Copyright 2024 The Carvel Authors.
 // SPDX-License-Identifier: Apache-2.0
 

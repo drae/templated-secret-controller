@@ -25,7 +25,7 @@ CACHE_DIR := $(shell pwd)/.cache
 CACHE_BIN := $(CACHE_DIR)/bin
 
 # 
-.PHONY: controller-gen ensure-codegen-tools fmt vet build client-gen verify-client-gen generate manifests verify-generated clean clean-cache test coverage coverage-html docker-build
+.PHONY: controller-gen ensure-codegen-tools fmt vet build client-gen verify-client-gen generate manifests verify-generated clean clean-cache test test-unit test-integration coverage coverage-html docker-build
 
 # Find or download controller-gen
 controller-gen:
@@ -97,14 +97,24 @@ clean-cache:
 	@rm -rf $(CACHE_DIR)
 
 # Run tests
-test:
-	NAMESPACE=templated-secret-dev go test ./... -coverprofile cover.out
+test: test-unit
 
-coverage: test
-	NAMESPACE=templated-secret-dev go tool cover -func=cover.out
+# Run unit tests only (excludes integration tests)
+test-unit:
+	go test ./... -coverprofile cover.txt
 
-coverage-html: test
-	NAMESPACE=templated-secret-dev go tool cover -html=cover.out
+# Run integration tests (requires Kubernetes cluster)
+test-integration:
+	NAMESPACE=templated-secret-dev go test -tags=integration ./test/ci/... -timeout 60m -v
+
+# Run all tests (unit and integration, requires Kubernetes cluster)
+test-all: test-unit test-integration
+
+coverage: test-unit
+	go tool cover -func=cover.txt
+
+coverage-html: test-unit
+	go tool cover -html=cover.txt
 
 # Build the docker image
 docker-build:
