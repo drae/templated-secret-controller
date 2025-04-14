@@ -91,12 +91,12 @@ jobs:
       - name: Push chart to OCI registry
         run: |
           # Push to GitHub OCI registry
-          helm push "$CHART_TARBALL" oci://ghcr.io/${{ github.repository }}/charts
+          helm push "$CHART_TARBALL" oci://ghcr.io/${{ github.repository_owner }}/charts
 
       - name: Sign Helm chart with Cosign
         run: |
           # The OCI reference to the published chart
-          CHART_REF="ghcr.io/${{ github.repository }}/charts/templated-secret-controller:${{ steps.set-version.outputs.version }}"
+          CHART_REF="ghcr.io/${{ github.repository_owner }}/charts/templated-secret-controller:${{ steps.set-version.outputs.version }}"
 
           # Sign the chart using keyless signing
           cosign sign --yes "$CHART_REF"
@@ -107,7 +107,7 @@ jobs:
       - name: Output installation instructions
         run: |
           VERSION="${{ steps.set-version.outputs.version }}"
-          CHART_REF="ghcr.io/${{ github.repository }}/charts/templated-secret-controller:$VERSION"
+          CHART_REF="ghcr.io/${{ github.repository_owner }}/charts/templated-secret-controller:$VERSION"
 
           echo "::notice::Chart published successfully! To install, run:"
           echo "::notice::helm install templated-secret-controller oci://$CHART_REF"
