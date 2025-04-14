@@ -138,7 +138,7 @@ jobs:
             deployment -l app.kubernetes.io/name=templated-secret-controller --timeout=60s
 
       - name: Run integration tests
-        uses: n8maninger/action-golang-test@v1
+        uses: n8maninger/action-golang-test@v2
         with:
           package: ./test/ci/
           args: -tags=integration ./test/ci/... -timeout 10m
