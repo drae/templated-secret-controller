@@ -17,4 +17,4 @@ spec:
       name: metrics
   selector:
     {{- include "templated-secret-controller.selectorLabels" . | nindent 4 }}
-{{- end }}
+{{- end }} 
