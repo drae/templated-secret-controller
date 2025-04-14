@@ -8,7 +8,6 @@ metadata:
     meta.helm.sh/release-namespace: {{ .Release.Namespace }}
   labels:
     {{- include "templated-secret-controller.labels" . | nindent 4 }}
-    app.kubernetes.io/managed-by: Helm
 spec:
   type: {{ .Values.metrics.service.type }}
   ports:

@@ -7,7 +7,6 @@ metadata:
     meta.helm.sh/release-namespace: {{ .Release.Namespace }}
   labels:
     {{- include "templated-secret-controller.labels" . | nindent 4 }}
-    app.kubernetes.io/managed-by: Helm
 spec:
   {{- if not (and .Values.autoscaling (eq .Values.autoscaling.enabled true)) }}
   replicas: {{ .Values.replicaCount | int }}
