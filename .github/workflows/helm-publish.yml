@@ -16,6 +16,11 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: read
+  packages: write
+  id-token: write # Needed for keyless cosign signing
+
 jobs:
   publish:
     name: Publish Helm Chart
@@ -23,9 +28,7 @@ jobs:
     # Set environment variables at the job level so they're available to all steps
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    permissions:
-      contents: read
-      packages: write
+      COSIGN_EXPERIMENTAL: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -36,6 +39,9 @@ jobs:
         uses: azure/setup-helm@v3
         with:
           version: "latest"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2
@@ -70,7 +76,7 @@ jobs:
             sed -i "s/^version: .*$/version: $VERSION/" "$CHART_PATH/Chart.yaml"
           fi
 
-      - name: Package and push chart
+      - name: Package chart
         run: |
           CHART_PATH="./charts/templated-secret-controller"
           CHART_NAME="templated-secret-controller"
@@ -79,11 +85,32 @@ jobs:
           # Package the Helm chart
           helm package "$CHART_PATH"
 
+          # Store the tarball path for later steps
+          echo "CHART_TARBALL=${CHART_NAME}-${VERSION}.tgz" >> $GITHUB_ENV
+
+      - name: Push chart to OCI registry
+        run: |
           # Push to GitHub OCI registry
-          helm push "${CHART_NAME}-${VERSION}.tgz" oci://ghcr.io/${{ github.repository }}/charts
+          helm push "$CHART_TARBALL" oci://ghcr.io/${{ github.repository }}/charts
+
+      - name: Sign Helm chart with Cosign
+        run: |
+          # The OCI reference to the published chart
+          CHART_REF="ghcr.io/${{ github.repository }}/charts/templated-secret-controller:${{ steps.set-version.outputs.version }}"
+
+          # Sign the chart using keyless signing
+          cosign sign --yes "$CHART_REF"
+
+          # Generate SBOM and sign it (optional)
+          # cosign attest --yes --type spdxjson --predicate <(syft "$CHART_TARBALL" -o spdx-json) "$CHART_REF"
 
       - name: Output installation instructions
         run: |
           VERSION="${{ steps.set-version.outputs.version }}"
+          CHART_REF="ghcr.io/${{ github.repository }}/charts/templated-secret-controller:$VERSION"
+
           echo "::notice::Chart published successfully! To install, run:"
-          echo "::notice::helm install templated-secret-controller oci://ghcr.io/${{ github.repository }}/charts/templated-secret-controller --version $VERSION"
+          echo "::notice::helm install templated-secret-controller oci://$CHART_REF"
+
+          echo "::notice::To verify the chart signature with Cosign, run:"
+          echo "::notice::cosign verify $CHART_REF"
