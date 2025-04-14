@@ -8,9 +8,9 @@ replicaCount: 1
 # Image repository and tag settings
 image:
   repository: ghcr.io/drae/templated-secret-controller
-  pullPolicy: Always
+  pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: latest
+  tag: ""
 
 # Sorted alphabetically below this point
 affinity: {}
