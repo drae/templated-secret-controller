@@ -122,13 +122,15 @@ docker_manifests:
       - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-armv7"
     skip_push: auto
 
-signs:
+docker_signs:
   - cmd: cosign
     args:
-      - sign-blob
+      - sign
       - --yes
-      - --output-signature=${signature}
-      - ${artifact}
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-amd64"
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-arm64"
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-armv6"
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-armv7"
     artifacts: all
     output: true
 
