@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/drae/templated-secret-controller/pkg/generator"
@@ -462,6 +463,85 @@ func Test_SecretTemplate(t *testing.T) {
 	}
 }
 
+func TestAttachWatches(t *testing.T) {
+	// Create a mock controller to capture and verify watch calls
+	mockController := &mockController{}
+
+	// Setup the reconciler with necessary dependencies
+	tsv1alpha1.AddToScheme(scheme.Scheme)
+	corev1.AddToScheme(scheme.Scheme)
+	testLogr := zap.New(zap.UseDevMode(true))
+	k8sClient := fakeClient.NewClientBuilder().WithScheme(scheme.Scheme).Build()
+
+	// Create a fake manager that includes the cache
+	fakeManager := &fakeManager{cache: &fakeCacheAdapter{client: k8sClient}}
+	fakeClientLoader := fakeClientLoader{client: k8sClient}
+	secretTemplateReconciler := generator.NewSecretTemplateReconciler(fakeManager, k8sClient, &fakeClientLoader, tracker.NewTracker(), testLogr)
+
+	// Call AttachWatches
+	err := secretTemplateReconciler.AttachWatches(mockController)
+
+	// Verify no errors occurred
+	assert.NoError(t, err)
+
+	// Verify the expected number of watch calls (should be 3)
+	assert.Equal(t, 3, mockController.watchCallCount, "Expected 3 watch calls")
+
+	// Verify each type of watch was set up
+	assert.True(t, mockController.ownerWatchSetup, "Expected owner watch to be set up")
+	assert.True(t, mockController.trackerWatchSetup, "Expected tracker watch to be set up")
+	assert.True(t, mockController.templateWatchSetup, "Expected template watch to be set up")
+}
+
+// mockController implements controller.Controller for testing
+type mockController struct {
+	watchCallCount     int
+	ownerWatchSetup    bool
+	trackerWatchSetup  bool
+	templateWatchSetup bool
+}
+
+func (m *mockController) Watch(src source.TypedSource[reconcile.Request]) error {
+	m.watchCallCount++
+
+	// Instead of complex type assertions, use a simpler approach to identify watch types
+	// based on runtime type information
+
+	// First call is the owner watch for Secrets
+	if m.watchCallCount == 1 {
+		m.ownerWatchSetup = true
+		return nil
+	}
+
+	// Second call is the tracker watch for Secrets
+	if m.watchCallCount == 2 {
+		m.trackerWatchSetup = true
+		return nil
+	}
+
+	// Third call is the template watch
+	if m.watchCallCount == 3 {
+		m.templateWatchSetup = true
+		return nil
+	}
+
+	return nil
+}
+
+func (m *mockController) Start(ctx context.Context) error {
+	return nil
+}
+
+// GetLogger implements the controller.TypedController interface
+func (m *mockController) GetLogger() logr.Logger {
+	return logr.Discard()
+}
+
+// Reconcile implements the controller.TypedController interface
+func (m *mockController) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
+	return reconcile.Result{}, nil
+}
+
 func Test_SecretTemplate_Errors(t *testing.T) {
 	type test struct {
 		name            string
@@ -800,7 +880,7 @@ func newReconciler(objects ...client.Object) (secretTemplateReconciler *generato
 	fakeManager := &fakeManager{cache: &fakeCacheAdapter{client: k8sClient}}
 	fakeClientLoader := fakeClientLoader{client: k8sClient}
 	secretTemplateReconciler = generator.NewSecretTemplateReconciler(fakeManager, k8sClient, &fakeClientLoader, tracker.NewTracker(), testLogr)
-	
+
 	// Set max secret age to zero for test purposes
 	// This ensures we don't requeue when ServiceAccountName is empty
 	secretTemplateReconciler.SetReconciliationSettings(30*time.Second, 0)
