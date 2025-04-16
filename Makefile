@@ -101,7 +101,9 @@ test: test-unit
 
 # Run unit tests only (excludes integration tests)
 test-unit:
-	go test ./... -coverprofile cover.txt
+	go test ./... -coverprofile cover.out.tmp
+	grep -v "zz_generated\|/pkg/client/" cover.out.tmp > cover.txt
+	go tool cover -func=cover.txt
 
 # Run integration tests (requires Kubernetes cluster)
 test-integration:

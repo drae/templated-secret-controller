@@ -137,7 +137,8 @@ jobs:
       # Run GO unit tests
       - name: Run unit tests with coverage
         run: |
-          go test ./... -coverprofile cover.txt
+          go test ./... -coverprofile cover.out.tmp
+          grep -v "zz_generated\|/pkg/client/" cover.out.tmp > cover.txt
           go tool cover -func=cover.txt
 
       - name: Upload coverage to Codecov

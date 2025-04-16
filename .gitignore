@@ -9,7 +9,7 @@
 /.cache
 /.env
 /bin
-/cover.out
-/cover.txt
+/cover.out*
+/cover.txt*
 /generate.out
 /build/
