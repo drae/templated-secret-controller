@@ -224,8 +224,34 @@ jobs:
             --set image.tag=$TAG-$ARCH \
             --set image.pullPolicy=IfNotPresent \
             --namespace templated-secret
-          kubectl -n templated-secret wait --for=condition=available \
-            deployment -l app.kubernetes.io/name=templated-secret-controller --timeout=60s
+
+          # Configure longer timeout for ARM architectures
+          TIMEOUT=60s
+          if [[ "$ARCH" == "arm" || "$ARCH" == "arm64" ]]; then
+            TIMEOUT=180s
+            echo "Using extended timeout of $TIMEOUT for ARM architecture"
+          fi
+
+          # Wait for deployment to be available
+          echo "Waiting for deployment to be available (timeout: $TIMEOUT)..."
+          if ! kubectl -n templated-secret wait --for=condition=available \
+            deployment -l app.kubernetes.io/name=templated-secret-controller --timeout=$TIMEOUT; then
+            
+            echo "Deployment failed to become available in time. Collecting diagnostic information:"
+            echo "=== Deployment Status ==="
+            kubectl -n templated-secret describe deployment -l app.kubernetes.io/name=templated-secret-controller
+            
+            echo "=== Pod Status ==="
+            kubectl -n templated-secret get pods -l app.kubernetes.io/name=templated-secret-controller -o wide
+            
+            echo "=== Container Logs ==="
+            FAILED_POD=$(kubectl -n templated-secret get pods -l app.kubernetes.io/name=templated-secret-controller -o jsonpath='{.items[0].metadata.name}')
+            if [ ! -z "$FAILED_POD" ]; then
+              kubectl -n templated-secret logs $FAILED_POD --all-containers
+            fi
+            
+            exit 1
+          fi
 
       # End to End testing of installed controller
       - name: Run integration tests
