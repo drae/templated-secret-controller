@@ -1,0 +1,341 @@
+name: Common CI Steps
+on:
+  workflow_call:
+    inputs:
+      img:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+
+jobs:
+  setup:
+    name: Build docker image
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm, arm64]
+    outputs:
+      tag: ${{ steps.set-tag.outputs.tag }}
+    env:
+      IMG: ${{ inputs.img }}
+      TAG: ${{ inputs.tag }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      # ...existing code from ci.yml setup job...
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set TAG env
+        id: set-tag
+        run: |
+          TAG=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Set up go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build controller binary
+        run: |
+          CGO_ENABLED=0 GOARCH=$ARCH go build -o templated-secret-controller \
+            -ldflags "-s -w -X github.com/drae/templated-secret-controller/cmd/controller.Version=$TAG" \
+            ./cmd/controller/main.go
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            SGCTRL_VER=${{ env.TAG }}
+            TARGETARCH=${{ matrix.arch }}
+          tags: ${{ env.IMG }}:${{ env.TAG }}-${{ matrix.arch }}
+          load: true
+
+      - name: Save Docker image
+        run: |
+          mkdir -p /tmp/docker-image
+          docker save $IMG:$TAG-$ARCH -o /tmp/docker-image/image-$ARCH.tar
+
+      - name: Scan Docker image for vulnerabilities (Grype)
+        uses: anchore/scan-action@v3
+        with:
+          image: "docker-archive:/tmp/docker-image/image-${{ matrix.arch }}.tar"
+          fail-build: true
+          severity-cutoff: high
+
+      - name: Format Grype Docker image scan results for PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          # Generate output in table format (which is already markdown-compatible)
+          # and wrap it in markdown code block for proper formatting
+          echo "## Docker Image Vulnerabilities" > grype-docker-report.md
+          echo '```' >> grype-docker-report.md
+          grype docker-archive:/tmp/docker-image/image-$ARCH.tar >> grype-docker-report.md
+          echo '```' >> grype-docker-report.md
+
+      - name: Post Docker image Grype findings as PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: grype-docker-report.md
+          header: |
+            ## :mag: Docker Image Vulnerability Scan (Grype)
+            <details>
+            <summary>Click to expand scan results for <code>${{ env.IMG }}:${{ env.TAG }}-${{ matrix.arch }}</code></summary>
+
+            ---
+          append: true
+          hide_and_recreate: true
+          hide_classify: "DockerImageScan"
+          recreate: true
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ matrix.arch }}
+          path: /tmp/docker-image/image-${{ matrix.arch }}.tar
+          retention-days: 1
+
+  controller-test:
+    name: Test controller
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      matrix:
+        arch: [amd64, arm, arm64]
+    env:
+      IMG: ${{ inputs.img }}
+      TAG: ${{ inputs.tag }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set TAG env
+        id: set-tag
+        run: |
+          TAG=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Set up go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Run GO unit tests
+      - name: Run unit tests with coverage
+        run: |
+          go test ./... -coverprofile cover.txt
+          go tool cover -func=cover.txt
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./cover.txt
+          fail_ci_if_error: true
+          verbose: true
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      # Vulnerability analysis and reporting of GO modules
+      - name: Install Syft and Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM for Go modules
+        run: |
+          MODULE_NAME=$(go list -m)
+          MODULE_VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          # Use the current syntax for Syft scan command
+          syft scan dir:. --source-name "${MODULE_NAME}" --source-version "${MODULE_VERSION}" -o cyclonedx-json > sbom-go-modules.json
+
+      - name: Scan Go modules SBOM for vulnerabilities (Grype)
+        run: grype sbom:sbom-go-modules.json --fail-on high
+
+      - name: Format Grype results for PR comment
+        if: github.event_name == 'pull_request'
+        run: |
+          # Generate output in table format (which is already markdown-compatible)
+          # and wrap it in markdown code block for proper formatting
+          echo "## Go Module Vulnerabilities" > grype-report.md
+          echo '```' >> grype-report.md
+          grype sbom:sbom-go-modules.json >> grype-report.md
+          echo '```' >> grype-report.md
+
+      - name: Post Grype findings as PR comment
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: grype-report.md
+          header: |
+            ## :mag: Go Modules Vulnerability Scan (Grype)
+            <details>
+            <summary>Click to expand Go modules scan results</summary>
+
+            ---
+          append: true
+          hide_and_recreate: true
+          hide_classify: "GoModulesScan"
+          recreate: true
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Setup Kind cluster for E2E testing
+      - name: Create k8s Kind Cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kinder
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ matrix.arch }}
+          path: /tmp/docker-image
+
+      - name: Load Docker image
+        run: |
+          docker load -i /tmp/docker-image/image-$ARCH.tar
+
+      - name: Load image to Kind
+        run: kind load docker-image --name kinder $IMG:$TAG-$ARCH
+
+      - name: Deploy controller with Helm
+        run: |
+          kubectl create namespace templated-secret --dry-run=client -o yaml | kubectl apply -f -
+          helm install templated-secret-controller charts/templated-secret-controller \
+            --set image.repository=$IMG \
+            --set image.tag=$TAG-$ARCH \
+            --set image.pullPolicy=IfNotPresent \
+            --namespace templated-secret
+          kubectl -n templated-secret wait --for=condition=available \
+            deployment -l app.kubernetes.io/name=templated-secret-controller --timeout=60s
+
+      # End to End testing of installed controller
+      - name: Run integration tests
+        uses: n8maninger/action-golang-test@v2
+        with:
+          package: ./test/ci/
+          args: -tags=integration ./test/ci/... -timeout 10m
+        env:
+          NAMESPACE: templated-secret
+
+  helm-test:
+    name: Lint and Test Helm Charts
+    runs-on: ubuntu-latest
+    env:
+      IMG: ${{ inputs.img }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+          check-latest: true
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@v2.7.0
+
+      - name: List changed charts
+        id: list-changed
+        run: |
+          changed=$(ct list-changed --target-branch ${{ github.event.repository.default_branch }})
+          if [[ -n "$changed" ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run chart-testing (lint)
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct lint --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret
+
+      # Create Kind cluster for testing
+      - name: Create kind cluster
+        if: steps.list-changed.outputs.changed == 'true'
+        uses: helm/kind-action@v1
+
+      - name: Run chart-testing (install)
+        if: steps.list-changed.outputs.changed == 'true'
+        run: ct install --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret
+
+      - name: Apply example manifests
+        if: steps.list-changed.outputs.changed == 'true'
+        run: kubectl -n templated-secret apply -f examples/
+
+      - name: Wait for CRDs
+        if: steps.list-changed.outputs.changed == 'true'
+        run: kubectl wait --for=condition=established --timeout=30s crd/secrettemplates.templatedsecret.starstreak.dev
+
+      - name: Check for secret creation
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          for i in {1..6}; do
+            if kubectl -n templated-secret get secrets -o json | jq '.items[] | select(.metadata.ownerReferences != null) | select(.metadata.ownerReferences[].kind == "SecretTemplate")' | grep -q "secret-"; then
+              echo "✅ Secrets created successfully"
+              break
+            fi
+            if [ $i -eq 6 ]; then
+              echo "❌ Timed out waiting for secrets"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Test upgrade
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          helm upgrade templated-secret-controller charts/templated-secret-controller \
+            --set image.repository=$IMG \
+            --set image.tag=$TAG \
+            --set image.pullPolicy=IfNotPresent \
+            --namespace templated-secret
+
+      - name: Test uninstall
+        if: steps.list-changed.outputs.changed == 'true'
+        run: |
+          helm uninstall templated-secret-controller --namespace templated-secret
+          kubectl get crd secrettemplates.templatedsecret.starstreak.dev
+
+      - name: Format Helm chart lint/install results for PR comment
+        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true'
+        run: |
+          {
+            echo '# Helm Chart Lint Results';
+            echo '```';
+            ct lint --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret || true;
+            echo '```';
+            echo ''; 
+            echo '# Helm Chart Install Results';
+            echo '```';
+            ct install --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret || true;
+            echo '```';
+          } > helm-chart-report.md
+
+      - name: Post Helm chart findings as PR comment
+        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          path: helm-chart-report.md
+          header: "[Helm Chart Lint/Install Results]"
