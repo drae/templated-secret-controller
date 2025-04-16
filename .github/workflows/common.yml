@@ -44,17 +44,34 @@ jobs:
 
       - name: Build controller binary
         run: |
-          CGO_ENABLED=0 GOARCH=$ARCH go build -o templated-secret-controller \
+          # Set GOOS to linux for all architectures
+          GOOS=linux
+
+          # Set proper GOARM version based on architecture
+          GOARM=""
+          if [[ "$ARCH" == "arm" ]]; then
+            GOARM=7  # Use ARMv7 by default for better compatibility
+          fi
+
+          # Build with all necessary flags for cross-compilation
+          CGO_ENABLED=0 GOOS=$GOOS GOARCH=$ARCH GOARM=$GOARM go build -o templated-secret-controller \
             -ldflags "-s -w -X github.com/drae/templated-secret-controller/cmd/controller.Version=$TAG" \
             ./cmd/controller/main.go
+
+          # Print binary information for debugging
+          echo "Built binary for: GOOS=$GOOS GOARCH=$ARCH GOARM=$GOARM"
+          file templated-secret-controller
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: linux/${{ matrix.arch }}
           build-args: |
             SGCTRL_VER=${{ env.TAG }}
-            TARGETARCH=${{ matrix.arch }}
           tags: ${{ env.IMG }}:${{ env.TAG }}-${{ matrix.arch }}
           load: true
 
