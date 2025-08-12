@@ -10,7 +10,7 @@ cosign = '2.5.0'                     #renovate: packageName=sigstore/cosign
 jq = '1.7.1'                            #renovate: packageName=jqlang/jq
 kubectl = '1.32.3'                      #renovate: datasource=github-tags packageName=kubernetes/kubectl versioning=^kubernetes-(?<version>.*)$
 kubeconform = '0.6.7'                   #renovate: packageName=yannh/kubeconform
-kustomize = '5.6.0'                     #renovate: packageName=kubernetes-sigs/kustomize
+kustomize = '5.7.1'                     #renovate: packageName=kubernetes-sigs/kustomize
 stern = '1.32.0'                        #renovate: packageName=stern/stern  
 "pipx:uv" = '0.6.10'                     #renovate: packageName=astral-sh/uv
 go = '1.24.2'                           #renovate: datasource=golang-version packageName=golang/go
