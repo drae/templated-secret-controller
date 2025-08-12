@@ -25,7 +25,7 @@ jobs:
     steps:
       # ...existing code from ci.yml setup job...
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -134,7 +134,7 @@ jobs:
       ARCH: ${{ matrix.arch }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -287,7 +287,7 @@ jobs:
       TAG: ${{ inputs.tag }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
