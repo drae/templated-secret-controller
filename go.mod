@@ -4,7 +4,7 @@ go 1.24.2
 
 require (
 	github.com/ghodss/yaml v1.0.0
-	github.com/go-logr/logr v1.4.2
+	github.com/go-logr/logr v1.4.3
 	github.com/stretchr/testify v1.10.0
 	k8s.io/api v0.33.3
 	k8s.io/apiextensions-apiserver v0.33.3
