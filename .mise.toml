@@ -13,6 +13,6 @@ kubeconform = '0.6.7'                   #renovate: packageName=yannh/kubeconform
 kustomize = '5.7.1'                     #renovate: packageName=kubernetes-sigs/kustomize
 stern = '1.32.0'                        #renovate: packageName=stern/stern  
 "pipx:uv" = '0.8.9'                     #renovate: packageName=astral-sh/uv
-go = '1.25.0'                           #renovate: datasource=golang-version packageName=golang/go
+go = '1.25.1'                           #renovate: datasource=golang-version packageName=golang/go
 goreleaser = "2.8.2"
 vivid = "latest"
