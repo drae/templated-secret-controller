@@ -87,6 +87,13 @@ jobs:
           fail-build: true
           severity-cutoff: high
 
+      - name: Ensure Grype CLI (for report formatting)
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! command -v grype >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          fi
+
       - name: Format Grype Docker image scan results for PR comment
         if: github.event_name == 'pull_request'
         run: |
