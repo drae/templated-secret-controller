@@ -75,6 +75,26 @@ func (s *Status) SetReconcileCompleted(err error) {
 	s.UpdateFunc(s.S)
 }
 
+// AppendCrossNamespaceDegraded appends (or updates) CrossNamespaceInputDegraded condition without disturbing primary outcome conditions.
+func (s *Status) AppendCrossNamespaceDegraded(message string) {
+	// If reconcile failed we still can append degraded info but keep existing conditions.
+	// Check if already present and update.
+	for i, cond := range s.S.Conditions {
+		if cond.Type == tsv1alpha1.CrossNamespaceInputDegraded {
+			s.S.Conditions[i].Status = corev1.ConditionTrue
+			s.S.Conditions[i].Message = message
+			s.UpdateFunc(s.S)
+			return
+		}
+	}
+	s.S.Conditions = append(s.S.Conditions, tsv1alpha1.Condition{
+		Type:    tsv1alpha1.CrossNamespaceInputDegraded,
+		Status:  corev1.ConditionTrue,
+		Message: message,
+	})
+	s.UpdateFunc(s.S)
+}
+
 func (s *Status) friendlyErrMsg(errMsg string) string {
 	errMsgPieces := strings.Split(errMsg, "\n")
 	if len(errMsgPieces[0]) > 80 {

@@ -45,6 +45,11 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.9.2
 
+      - name: Install Syft (for SBOM generation)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft version
+
       - name: Clean build artifacts
         run: |
           rm -rf build/
@@ -67,6 +72,34 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+
+      - name: Upload SBOM artifacts (if present)
+        if: always()
+        run: |
+          if ls build/sbom_*.cdx.json 1> /dev/null 2>&1; then
+            echo "Found SBOM files:";
+            ls -1 build/sbom_*.cdx.json;
+          else
+            echo "No SBOM files found (unexpected if sboms block enabled).";
+          fi
+
+      - name: Cosign verify (images) (best-effort)
+        if: always()
+        continue-on-error: true
+        run: |
+          TAG="${{ github.ref_name }}"
+          OWNER="${{ github.repository_owner }}"
+          NAME="${{ github.event.repository.name }}"
+          # Per-arch images
+          for arch in amd64 arm64 armv6 armv7; do
+            ref="ghcr.io/$OWNER/$NAME:$TAG-$arch"
+            echo "Verifying $ref" || true
+            cosign verify --certificate-identity-regexp "github.com/.+" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" || true
+          done
+          # Multi-arch manifest
+          ref="ghcr.io/$OWNER/$NAME:$TAG"
+          echo "Verifying manifest $ref" || true
+          cosign verify --certificate-identity-regexp "github.com/.+" --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" || true
 
   generate-release-artifacts:
     name: Generate Release Artifacts

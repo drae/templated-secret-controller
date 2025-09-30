@@ -19,6 +19,10 @@ templated-secret-controller provides a custom resource for generating and managi
 - Continuously reconcile secrets when source resources change
 - Support for various Kubernetes resource types as input sources
 - Role-based access control for reading input resources
+- Optional cross-namespace Secret inputs gated by feature flag + per-Secret export annotation
+- Health and readiness endpoints with cache-sync aware readiness
+- Metrics endpoint (Prometheus friendly) and optional ServiceMonitor
+- SBOM generation and image signing (Cosign) in release pipeline
 
 ## Installation
 
@@ -106,6 +110,15 @@ make test
 
 # Build container image
 make docker-build
+
+# Generate a local SBOM (requires syft) after build
+make sbom
+
+# Run controller locally with probes and metrics disabled
+./build/templated-secret-controller \
+  --metrics-bind-address=0 \
+  --health-probe-bind-address=0 \
+  --enable-cross-namespace-secret-inputs=false
 ```
 
 ## CI/CD
@@ -115,7 +128,42 @@ The project uses GitHub Actions for continuous integration and deployment:
 - CI workflow runs on PRs and pushes to main
 - Release workflow triggers on tags formatted as 'v*'
 - Images are published to GitHub Container Registry
+- Release pipeline generates a CycloneDX SBOM per archive and signs images & multi-arch manifests with Cosign (when not a snapshot)
+
+### Probes & Readiness
+
+The controller exposes (by default):
+
+- Metrics: `:8080/metrics`
+- Health: `:8081/healthz`
+- Readiness: `:8081/readyz` (only returns 200 after informer caches sync and leader election, if enabled)
+
+Disable by setting Helm values `metrics.enabled=false` and/or `probes.enabled=false` (or flags `--metrics-bind-address=0`, `--health-probe-bind-address=0`).
+
+### Cross-Namespace Secret Inputs
+
+Enable via `--enable-cross-namespace-secret-inputs` (Helm: `crossNamespace.enabled=true`). Source Secrets must include annotation:
+
+```yaml
+templatedsecret.starstreak.dev/export-to-namespaces: "ns-a,ns-b"   # or "*"
+```
+
+Warnings (condition `CrossNamespaceInputDegraded`) appear if a referenced source namespace is not watched (updates may not propagate).
+
+### SBOM Retrieval
+
+Release assets include `sbom_<project>_<version>.cdx.json`. Locally generate with `make sbom` (syft required in PATH).
+
+### Image & Manifest Signing
+
+All per-arch images and multi-arch manifests are signed with Cosign. To verify (example):
+
+```shell
+cosign verify ghcr.io/drae/templated-secret-controller:<version>
+```
+
+Additional policy tooling (e.g., Kyverno / Ratify) can enforce signature & SBOM presence.
 
 ## Code Coverage
 
-<img src="https://codecov.io/gh/drae/templated-secret-controller/graphs/tree.svg?token=XCY5S8HZK1">
+![Code coverage graph](https://codecov.io/gh/drae/templated-secret-controller/graphs/tree.svg?token=XCY5S8HZK1)

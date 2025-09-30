@@ -25,7 +25,7 @@ CACHE_DIR := $(shell pwd)/.cache
 CACHE_BIN := $(CACHE_DIR)/bin
 
 # 
-.PHONY: controller-gen ensure-codegen-tools fmt vet build client-gen verify-client-gen generate manifests verify-generated clean clean-cache test test-unit test-integration coverage coverage-html docker-build
+.PHONY: controller-gen ensure-codegen-tools fmt vet build client-gen verify-client-gen generate manifests verify-generated clean clean-cache test test-unit test-integration coverage coverage-html docker-build sbom ci-sim
 
 # Find or download controller-gen
 controller-gen:
@@ -121,3 +121,27 @@ coverage-html: test-unit
 # Build the docker image
 docker-build:
 	REPOSITORY_OWNER=$(REPOSITORY_OWNER) REPOSITORY_NAME=$(REPOSITORY_NAME) goreleaser release --snapshot --clean --skip=publish,sign
+
+# Generate a CycloneDX SBOM locally (requires syft installed)
+sbom: build
+	@if ! command -v syft >/dev/null 2>&1; then echo "syft not found in PATH"; exit 1; fi
+	syft packages dir:build -o cyclonedx-json=sbom_local.cdx.json
+	@echo "SBOM written to sbom_local.cdx.json"
+
+# Simulate key CI steps locally (unit tests, snapshot multi-arch build, module SBOM + vulnerability scan if syft/grype available)
+ci-sim: fmt vet
+	@echo "==> Running unit tests"
+	go test ./... -coverprofile cover.out.tmp
+	grep -v "zz_generated\|/pkg/client/" cover.out.tmp > cover.txt
+	go tool cover -func=cover.txt | tail -n 5 || true
+	@echo "==> Snapshot multi-arch build (no publish/sign)"
+	REPOSITORY_OWNER=$(REPOSITORY_OWNER) REPOSITORY_NAME=$(REPOSITORY_NAME) goreleaser release --snapshot --clean --skip=publish,sign || { echo "goreleaser snapshot failed"; exit 1; }
+	@if command -v syft >/dev/null 2>&1; then \
+	  echo "==> Generating module SBOM"; \
+	  syft scan dir:. -o cyclonedx-json=sbom_modules.cdx.json || true; \
+	else echo "(syft not installed, skipping module SBOM)"; fi
+	@if command -v grype >/dev/null 2>&1; then \
+	  echo "==> Scanning module SBOM for vulnerabilities"; \
+	  grype sbom:sbom_modules.cdx.json --fail-on high || true; \
+	else echo "(grype not installed, skipping vulnerability scan)"; fi
+	@echo "==> CI simulation complete"

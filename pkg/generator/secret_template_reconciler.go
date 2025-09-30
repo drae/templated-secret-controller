@@ -58,6 +58,9 @@ type SecretTemplateReconciler struct {
 	// Reconciliation settings
 	reconciliationInterval time.Duration
 	maxSecretAge           time.Duration
+
+	// Cross-namespace configuration
+	crossNamespaceConfig CrossNamespaceConfig
 }
 
 var (
@@ -75,7 +78,24 @@ func NewSecretTemplateReconciler(mgr manager.Manager, client client.Client, load
 		log:                    log,
 		reconciliationInterval: defaultSyncPeriod,
 		maxSecretAge:           720 * time.Hour, // Default to 30 days
+		crossNamespaceConfig:   CrossNamespaceConfig{},
 	}
+}
+
+// CrossNamespaceConfig holds feature gate and policy settings for cross-namespace secret inputs.
+type CrossNamespaceConfig struct {
+	// Enabled gates the entire feature; when false any cross-namespace reference fails validation.
+	Enabled bool
+	// WarnOnUnwatched emits a warning condition/log if a referenced source namespace is not watched.
+	WarnOnUnwatched bool
+	// WatchedNamespaces contains the namespaces explicitly watched (empty => cluster-wide).
+	WatchedNamespaces map[string]struct{}
+}
+
+// SetCrossNamespaceConfig configures cross-namespace secret input behavior.
+func (r *SecretTemplateReconciler) SetCrossNamespaceConfig(cfg CrossNamespaceConfig) {
+	r.crossNamespaceConfig = cfg
+	r.log.Info("Cross-namespace secret inputs configuration", "enabled", cfg.Enabled, "warnOnUnwatched", cfg.WarnOnUnwatched, "watchedNamespaceCount", len(cfg.WatchedNamespaces))
 }
 
 // SetReconciliationSettings configures the reconciliation interval and max secret age
@@ -177,10 +197,16 @@ func (r *SecretTemplateReconciler) Reconcile(ctx context.Context, request reconc
 	status.SetReconciling(secretTemplate.ObjectMeta)
 	defer r.updateStatus(ctx, &secretTemplate)
 
-	return status.WithReconcileCompleted(r.reconcile(ctx, &secretTemplate))
+	result, degraded, err := r.reconcile(ctx, &secretTemplate)
+	result, err = status.WithReconcileCompleted(result, err)
+	if degraded && err == nil { // only append degraded condition on successful reconcile
+		status.AppendCrossNamespaceDegraded("One or more cross-namespace source secret namespaces are not watched; updates may not trigger reconciles")
+	}
+	return result, err
 }
 
-func (r *SecretTemplateReconciler) reconcile(ctx context.Context, secretTemplate *tsv1alpha1.SecretTemplate) (reconcile.Result, error) {
+// reconcile now returns a bool indicating whether a degraded cross-namespace condition should be surfaced.
+func (r *SecretTemplateReconciler) reconcile(ctx context.Context, secretTemplate *tsv1alpha1.SecretTemplate) (reconcile.Result, bool, error) {
 	// Check if there is an existing secret that's too old and needs regeneration
 	existingSecret := &corev1.Secret{}
 	secretKey := types.NamespacedName{
@@ -203,18 +229,18 @@ func (r *SecretTemplateReconciler) reconcile(ctx context.Context, secretTemplate
 		}
 	} else if !errors.IsNotFound(err) {
 		// Only return if it's not a NotFound error
-		return reconcile.Result{}, err
+		return reconcile.Result{}, false, err
 	}
 
 	// Resolve input resources
-	inputResources, err := r.resolveInputResources(ctx, secretTemplate)
+	inputResources, degraded, err := r.resolveInputResources(ctx, secretTemplate)
 	if err != nil {
-		return reconcile.Result{}, err
+		return reconcile.Result{}, degraded, err
 	}
 
 	evaluatedTemplateSecret, err := evaluateTemplate(secretTemplate.Spec.JSONPathTemplate, inputResources)
 	if err != nil {
-		return reconcile.Result{}, err
+		return reconcile.Result{}, degraded, err
 	}
 
 	// Create/Update Secret
@@ -262,7 +288,7 @@ func (r *SecretTemplateReconciler) reconcile(ctx context.Context, secretTemplate
 	})
 
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("creating/updating secret: %w", err)
+		return reconcile.Result{}, degraded, fmt.Errorf("creating/updating secret: %w", err)
 	}
 
 	// Log the result of the create/update operation
@@ -277,16 +303,16 @@ func (r *SecretTemplateReconciler) reconcile(ctx context.Context, secretTemplate
 	// Only requeue if we have a service account or max age set
 	// When using a service account, we need to periodically reconcile since we can't rely on the tracker
 	if secretTemplate.Spec.ServiceAccountName != "" {
-		return reconcile.Result{RequeueAfter: r.reconciliationInterval}, nil
+		return reconcile.Result{RequeueAfter: r.reconciliationInterval}, degraded, nil
 	}
 
 	// If max age is set, periodically requeue to check for regeneration
 	if r.maxSecretAge > 0 {
-		return reconcile.Result{RequeueAfter: r.reconciliationInterval}, nil
+		return reconcile.Result{RequeueAfter: r.reconciliationInterval}, degraded, nil
 	}
 
 	// If no service account and no max age, don't requeue - rely on resource tracking to trigger reconciliation
-	return reconcile.Result{}, nil
+	return reconcile.Result{}, degraded, nil
 }
 
 func (r *SecretTemplateReconciler) updateStatus(ctx context.Context, secretTemplate *tsv1alpha1.SecretTemplate) error {
@@ -369,14 +395,15 @@ func (r *SecretTemplateReconciler) clientForSecretTemplate(ctx context.Context, 
 	return c, nil
 }
 
-func (r *SecretTemplateReconciler) resolveInputResources(ctx context.Context, secretTemplate *tsv1alpha1.SecretTemplate) (map[string]interface{}, error) {
+func (r *SecretTemplateReconciler) resolveInputResources(ctx context.Context, secretTemplate *tsv1alpha1.SecretTemplate) (map[string]interface{}, bool, error) {
 	inputResourceclient, err := r.clientForSecretTemplate(ctx, secretTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("unable to load client for reading Input Resources: %w", err)
+		return nil, false, fmt.Errorf("unable to load client for reading Input Resources: %w", err)
 	}
 
 	secretTemplateKey := types.NamespacedName{Namespace: secretTemplate.Namespace, Name: secretTemplate.Name}
 	resolvedInputResources := map[string]interface{}{}
+	unwatchedEncountered := false
 
 	// Store resources to track in a local variable to avoid a race condition in the defer function
 	var resolvedInputResourceKeys []types.NamespacedName
@@ -393,23 +420,62 @@ func (r *SecretTemplateReconciler) resolveInputResources(ctx context.Context, se
 	}()
 
 	for _, inputResource := range secretTemplate.Spec.InputResources {
-		// Ensure we only load Secrets if using the default Client.
-		if secretTemplate.Spec.ServiceAccountName == "" && (inputResource.Ref.Kind != "Secret" || inputResource.Ref.APIVersion != "v1") {
-			return nil, fmt.Errorf("unable to load non-secrets without a specified serviceaccount")
+		// Determine effective namespace (default to template namespace)
+		effectiveNamespace := inputResource.Ref.Namespace
+		if effectiveNamespace == "" {
+			effectiveNamespace = secretTemplate.Namespace
 		}
 
-		unstructuredResource, err := resolveInputResource(inputResource.Ref, secretTemplate.Namespace, resolvedInputResources)
+		// Ensure we only load Secrets if using the default Client (same as existing rule)
+		if secretTemplate.Spec.ServiceAccountName == "" && (inputResource.Ref.Kind != "Secret" || inputResource.Ref.APIVersion != "v1") {
+			return nil, false, fmt.Errorf("unable to load non-secrets without a specified serviceaccount")
+		}
+
+		// Cross-namespace feature gate validation
+		isCrossNamespace := effectiveNamespace != secretTemplate.Namespace
+		if isCrossNamespace {
+			if inputResource.Ref.Kind != "Secret" || inputResource.Ref.APIVersion != "v1" {
+				return nil, false, fmt.Errorf("cross-namespace references limited to core/v1 Secrets")
+			}
+			if !r.crossNamespaceConfig.Enabled {
+				return nil, false, fmt.Errorf("cross-namespace secret inputs disabled by configuration")
+			}
+		}
+
+		unstructuredResource, err := resolveInputResource(inputResource.Ref, effectiveNamespace, resolvedInputResources)
 		if err != nil {
-			return nil, fmt.Errorf("unable to resolve input resource %s: %w", inputResource.Name, err)
+			return nil, false, fmt.Errorf("unable to resolve input resource %s: %w", inputResource.Name, err)
 		}
 
 		key := types.NamespacedName{
-			Namespace: secretTemplate.Namespace,
+			Namespace: effectiveNamespace,
 			Name:      unstructuredResource.GetName(),
 		}
 
 		if err := inputResourceclient.Get(ctx, key, &unstructuredResource); err != nil {
-			return nil, fmt.Errorf("cannot fetch input resource %s: %w", unstructuredResource.GetName(), err)
+			return nil, false, fmt.Errorf("cannot fetch input resource %s: %w", unstructuredResource.GetName(), err)
+		}
+
+		// Authorize cross-namespace secret usage via export annotation
+		if isCrossNamespace {
+			annotations := unstructuredResource.GetAnnotations()
+			allowed := false
+			if annotations != nil {
+				if raw, found := annotations["templatedsecret.starstreak.dev/export-to-namespaces"]; found {
+					allowed = namespaceAuthorized(raw, secretTemplate.Namespace)
+				}
+			}
+			if !allowed {
+				return nil, false, fmt.Errorf("secret %s/%s does not authorize export to namespace %s", key.Namespace, key.Name, secretTemplate.Namespace)
+			}
+
+			// Warn if the source namespace may not be watched (only if a finite watch set configured)
+			if r.crossNamespaceConfig.WarnOnUnwatched && len(r.crossNamespaceConfig.WatchedNamespaces) > 0 {
+				if _, ok := r.crossNamespaceConfig.WatchedNamespaces[effectiveNamespace]; !ok {
+					r.log.Info("cross-namespace secret namespace not in watch set; updates may not trigger reconciles", "sourceNamespace", effectiveNamespace, "secretTemplate", secretTemplate.Name, "templateNamespace", secretTemplate.Namespace)
+					unwatchedEncountered = true
+				}
+			}
 		}
 
 		content := unstructuredResource.UnstructuredContent()
@@ -422,7 +488,7 @@ func (r *SecretTemplateReconciler) resolveInputResources(ctx context.Context, se
 					if strVal, ok := v.(string); ok {
 						decoded, err := base64.StdEncoding.DecodeString(strVal)
 						if err != nil {
-							return nil, fmt.Errorf("failed decoding base64 from Secret %s, data field %s: %w",
+							return nil, false, fmt.Errorf("failed decoding base64 from Secret %s, data field %s: %w",
 								unstructuredResource.GetName(), k, err)
 						}
 						decodedData[k] = string(decoded)
@@ -437,7 +503,7 @@ func (r *SecretTemplateReconciler) resolveInputResources(ctx context.Context, se
 		resolvedInputResourceKeys = append(resolvedInputResourceKeys, key)
 	}
 
-	return resolvedInputResources, nil
+	return resolvedInputResources, unwatchedEncountered, nil
 }
 
 func resolveInputResource(ref tsv1alpha1.InputResourceRef, namespace string, inputResources map[string]interface{}) (unstructured.Unstructured, error) {
@@ -583,4 +649,23 @@ func evaluateBytes(mapping map[string]string, values map[string]interface{}) (ma
 	}
 
 	return evaluatedMapping, nil
+}
+
+// namespaceAuthorized returns true if the consumerNamespace is authorized by the export annotation value.
+// The value is a comma-separated list of namespaces or the wildcard '*'. Whitespace is ignored.
+func namespaceAuthorized(annotationValue, consumerNamespace string) bool {
+	if annotationValue == "" {
+		return false
+	}
+	parts := strings.Split(annotationValue, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "*" || p == consumerNamespace {
+			return true
+		}
+	}
+	return false
 }

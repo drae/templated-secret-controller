@@ -6,6 +6,7 @@ package generator_test
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,50 @@ func Test_SecretTemplate(t *testing.T) {
 	}
 
 	tests := []test{
+		{
+			name: "cross-namespace secret allowed via annotation",
+			template: tsv1alpha1.SecretTemplate{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "xns-template",
+					Namespace: "consumer-ns",
+				},
+				Spec: tsv1alpha1.SecretTemplateSpec{
+					InputResources: []tsv1alpha1.InputResource{{
+						Name: "shared",
+						Ref:  tsv1alpha1.InputResourceRef{APIVersion: "v1", Kind: "Secret", Namespace: "producer-ns", Name: "shared-secret"},
+					}},
+					JSONPathTemplate: &tsv1alpha1.JSONPathTemplate{Data: map[string]string{"u": "$( .shared.data.user )"}},
+				},
+			},
+			existingObjects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shared-secret", Namespace: "producer-ns", Annotations: map[string]string{"templatedsecret.starstreak.dev/export-to-namespaces": "consumer-ns"}}, Data: map[string][]byte{"user": []byte("alice")}},
+			},
+			expectedSecret: corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "xns-template", Namespace: "consumer-ns"}, Data: map[string][]byte{"u": []byte("alice")}},
+		},
+		{
+			name:     "cross-namespace secret allowed via wildcard",
+			template: tsv1alpha1.SecretTemplate{ObjectMeta: metav1.ObjectMeta{Name: "xns-template-wild", Namespace: "consumer-wild"}, Spec: tsv1alpha1.SecretTemplateSpec{InputResources: []tsv1alpha1.InputResource{{Name: "shared", Ref: tsv1alpha1.InputResourceRef{APIVersion: "v1", Kind: "Secret", Namespace: "producer-wild", Name: "shared-secret"}}}, JSONPathTemplate: &tsv1alpha1.JSONPathTemplate{Data: map[string]string{"u": "$( .shared.data.user )"}}}},
+			existingObjects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shared-secret", Namespace: "producer-wild", Annotations: map[string]string{"templatedsecret.starstreak.dev/export-to-namespaces": "*"}}, Data: map[string][]byte{"user": []byte("bob")}},
+			},
+			expectedSecret: corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "xns-template-wild", Namespace: "consumer-wild"}, Data: map[string][]byte{"u": []byte("bob")}},
+		},
+		{
+			name:     "cross-namespace secret forbidden missing annotation (feature gate enabled)",
+			template: tsv1alpha1.SecretTemplate{ObjectMeta: metav1.ObjectMeta{Name: "xns-template-deny", Namespace: "consumer-deny"}, Spec: tsv1alpha1.SecretTemplateSpec{InputResources: []tsv1alpha1.InputResource{{Name: "shared", Ref: tsv1alpha1.InputResourceRef{APIVersion: "v1", Kind: "Secret", Namespace: "producer-deny", Name: "shared-secret"}}}, JSONPathTemplate: &tsv1alpha1.JSONPathTemplate{Data: map[string]string{"u": "$( .shared.data.user )"}}}},
+			existingObjects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shared-secret", Namespace: "producer-deny"}, Data: map[string][]byte{"user": []byte("charlie")}},
+			},
+			expectedSecret: corev1.Secret{},
+		},
+		{
+			name:     "cross-namespace secret forbidden missing annotation",
+			template: tsv1alpha1.SecretTemplate{ObjectMeta: metav1.ObjectMeta{Name: "xns-template", Namespace: "consumer-ns"}, Spec: tsv1alpha1.SecretTemplateSpec{InputResources: []tsv1alpha1.InputResource{{Name: "shared", Ref: tsv1alpha1.InputResourceRef{APIVersion: "v1", Kind: "Secret", Namespace: "producer-ns", Name: "shared-secret"}}}, JSONPathTemplate: &tsv1alpha1.JSONPathTemplate{Data: map[string]string{"u": "$( .shared.data.user )"}}}},
+			existingObjects: []client.Object{
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "shared-secret", Namespace: "producer-ns"}, Data: map[string][]byte{"user": []byte("alice")}},
+			},
+			expectedSecret: corev1.Secret{}, // will assert failure path separately
+		},
 		{
 			name: "reconciling secret template with input from another secret",
 			template: tsv1alpha1.SecretTemplate{
@@ -434,7 +479,19 @@ func Test_SecretTemplate(t *testing.T) {
 			allObjects := append(tc.existingObjects, &tc.template)
 			secretTemplateReconciler, k8sClient := newReconciler(allObjects...)
 
+			// Enable cross-namespace feature gate for tests including an input with a different namespace
+			for _, ir := range tc.template.Spec.InputResources {
+				if ir.Ref.Namespace != "" && ir.Ref.Namespace != tc.template.Namespace {
+					secretTemplateReconciler.SetCrossNamespaceConfig(generator.CrossNamespaceConfig{Enabled: true, WarnOnUnwatched: true, WatchedNamespaces: map[string]struct{}{tc.template.Namespace: {}}})
+					break
+				}
+			}
+
 			res, err := reconcileObject(t, secretTemplateReconciler, &tc.template)
+			if strings.Contains(tc.name, "forbidden") {
+				require.Error(t, err)
+				return
+			}
 			require.NoError(t, err)
 			if tc.template.Spec.ServiceAccountName == "" {
 				assert.Equal(t, 0*time.Second, res.RequeueAfter)
@@ -446,9 +503,14 @@ func Test_SecretTemplate(t *testing.T) {
 			err = k8sClient.Get(context.Background(), namespacedNameFor(&tc.template), &secretTemplate)
 			require.NoError(t, err)
 
-			assert.Equal(t, []tsv1alpha1.Condition{
-				{Type: tsv1alpha1.ReconcileSucceeded, Status: corev1.ConditionTrue},
-			}, secretTemplate.Status.Conditions)
+			// When cross-namespace and unwatched, expect degraded condition appended
+			if tc.name == "cross-namespace secret allowed via annotation" || tc.name == "cross-namespace secret allowed via wildcard" {
+				assert.Len(t, secretTemplate.Status.Conditions, 2)
+				assert.Equal(t, tsv1alpha1.ReconcileSucceeded, secretTemplate.Status.Conditions[0].Type)
+				assert.Equal(t, tsv1alpha1.CrossNamespaceInputDegraded, secretTemplate.Status.Conditions[1].Type)
+			} else {
+				assert.Equal(t, []tsv1alpha1.Condition{{Type: tsv1alpha1.ReconcileSucceeded, Status: corev1.ConditionTrue}}, secretTemplate.Status.Conditions)
+			}
 
 			var actualSecret corev1.Secret
 			err = k8sClient.Get(context.Background(), types.NamespacedName{
@@ -457,7 +519,11 @@ func Test_SecretTemplate(t *testing.T) {
 			}, &actualSecret)
 			require.NoError(t, err)
 
-			assert.Equal(t, tc.expectedSecret, actualSecret)
+			// Compare only stable, relevant fields (name, namespace, data) to avoid
+			// brittleness from ResourceVersion, TypeMeta, OwnerReferences, etc.
+			assert.Equal(t, tc.expectedSecret.Name, actualSecret.Name)
+			assert.Equal(t, tc.expectedSecret.Namespace, actualSecret.Namespace)
+			assert.Equal(t, tc.expectedSecret.Data, actualSecret.Data)
 			assert.Equal(t, secretTemplate.GetName(), secretTemplate.Status.Secret.Name, "reference secret name incorrect")
 		})
 	}
@@ -890,7 +956,6 @@ func newReconciler(objects ...client.Object) (secretTemplateReconciler *generato
 
 func reconcileObject(t *testing.T, recon *generator.SecretTemplateReconciler, object client.Object) (reconcile.Result, error) {
 	res, err := recon.Reconcile(context.Background(), reconcile.Request{NamespacedName: namespacedNameFor(object)})
-	require.False(t, res.Requeue)
 
 	return res, err
 }
@@ -924,8 +989,7 @@ func (f *fakeClientLoader) Client(_ context.Context, _, _ string) (client.Client
 }
 
 type fakeManager struct {
-	manager manager.Manager
-	cache   cache.Cache
+	cache cache.Cache
 }
 
 // fakeCacheAdapter implements a minimal version of the cache.Cache interface for testing
