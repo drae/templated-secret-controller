@@ -8,8 +8,7 @@ permissions:
   contents: write # Needed for uploading release artifacts and creating release notes
   packages: write # Needed for container registry
   id-token: write # Needed for keyless cosign signing
-  issues: write # Required because common reusable workflow requests it for PR comments (no-op on tag push)
-  pull-requests: write # Required by common workflow; comment steps gated and won't run on tag push
+  # Deliberately omit issues/pull-requests write; reusable workflow only needs contents:read
 
 jobs:
   call-common:
