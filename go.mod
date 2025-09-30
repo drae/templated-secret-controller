@@ -1,6 +1,6 @@
 module github.com/drae/templated-secret-controller
 
-go 1.24.2
+go 1.25.1
 
 require (
 	github.com/ghodss/yaml v1.0.0
