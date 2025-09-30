@@ -9,6 +9,11 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   setup:
     name: Build docker image
@@ -105,7 +110,7 @@ jobs:
           echo '```' >> grype-docker-report.md
 
       - name: Post Docker image Grype findings as PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: grype-docker-report.md
@@ -200,7 +205,7 @@ jobs:
           echo '```' >> grype-report.md
 
       - name: Post Grype findings as PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: grype-report.md
@@ -385,7 +390,7 @@ jobs:
           } > helm-chart-report.md
 
       - name: Post Helm chart findings as PR comment
-        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true'
+        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: helm-chart-report.md
