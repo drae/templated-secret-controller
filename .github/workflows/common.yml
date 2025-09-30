@@ -9,6 +9,11 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
 jobs:
   setup:
     name: Build docker image
@@ -87,6 +92,13 @@ jobs:
           fail-build: true
           severity-cutoff: high
 
+      - name: Ensure Grype CLI (for report formatting)
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! command -v grype >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          fi
+
       - name: Format Grype Docker image scan results for PR comment
         if: github.event_name == 'pull_request'
         run: |
@@ -98,7 +110,7 @@ jobs:
           echo '```' >> grype-docker-report.md
 
       - name: Post Docker image Grype findings as PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: grype-docker-report.md
@@ -193,7 +205,7 @@ jobs:
           echo '```' >> grype-report.md
 
       - name: Post Grype findings as PR comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: grype-report.md
@@ -313,7 +325,7 @@ jobs:
 
       - name: Run chart-testing (lint)
         if: steps.list-changed.outputs.changed == 'true'
-        run: ct lint --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret
+        run: ct lint --target-branch ${{ github.event.repository.default_branch }}
 
       # Create Kind cluster for testing
       - name: Create kind cluster
@@ -368,7 +380,7 @@ jobs:
           {
             echo '# Helm Chart Lint Results';
             echo '```';
-            ct lint --target-branch ${{ github.event.repository.default_branch }} --namespace templated-secret || true;
+            ct lint --target-branch ${{ github.event.repository.default_branch }} || true;
             echo '```';
             echo ''; 
             echo '# Helm Chart Install Results';
@@ -378,7 +390,7 @@ jobs:
           } > helm-chart-report.md
 
       - name: Post Helm chart findings as PR comment
-        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true'
+        if: github.event_name == 'pull_request' && steps.list-changed.outputs.changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           path: helm-chart-report.md

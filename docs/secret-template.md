@@ -135,3 +135,64 @@ $ kubectl get secret helm-postgres
 NAME           TYPE        DATA   AGE
 helm-postgres  postgresql  5      1d
 ```
+
+### Cross-Namespace Secret Inputs (Experimental)
+
+The controller can (optionally) read Secret data from a different namespace than the `SecretTemplate` itself. This is disabled by default and must be explicitly enabled via the controller flag `--enable-cross-namespace-secret-inputs` (Helm value: `crossNamespace.enabled=true`).
+
+Security model:
+
+1. Only core/v1 `Secret` kinds are permitted cross-namespace.
+2. The source Secret MUST include an export annotation granting access:
+   `templatedsecret.starstreak.dev/export-to-namespaces: "consumer-a,consumer-b"`
+   or use a wildcard `*` to allow all namespaces:
+   `templatedsecret.starstreak.dev/export-to-namespaces: "*"`
+3. Without the annotation (or if the consumer namespace not listed) reconciliation fails.
+4. Changes to exported Secrets trigger re-reconciliation normally if their namespace is within the controller's watch set.
+
+Add a namespace to an input resource by specifying `ref.namespace`:
+
+```yaml
+apiVersion: templatedsecret.starstreak.dev/v1alpha1
+kind: SecretTemplate
+metadata:
+  name: shared-creds
+  namespace: consumer-a
+spec:
+  inputResources:
+  - name: shared
+    ref:
+      apiVersion: v1
+      kind: Secret
+      namespace: producer
+      name: platform-db
+  template:
+    data:
+      username: $(.shared.data.username)
+      password: $(.shared.data.password)
+```
+
+Source Secret example (namespace `producer`):
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: platform-db
+  namespace: producer
+  annotations:
+    templatedsecret.starstreak.dev/export-to-namespaces: consumer-a
+data:
+  username: YWxpY2U=
+  password: c2VjcmV0
+```
+
+Wildcard export example:
+
+```yaml
+metadata:
+  annotations:
+    templatedsecret.starstreak.dev/export-to-namespaces: "*"
+```
+
+When a referenced namespace is not part of the controller's watch set, a non-fatal status condition `CrossNamespaceInputDegraded` is added and updates to the source Secret may not trigger a refresh. Avoid this by running cluster-wide or including the producer namespace in the watch configuration.

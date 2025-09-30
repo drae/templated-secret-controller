@@ -123,7 +123,8 @@ docker_manifests:
     skip_push: auto
 
 docker_signs:
-  - cmd: cosign
+  - id: per-arch-image-signatures
+    cmd: cosign
     args:
       - sign
       - --yes
@@ -132,6 +133,16 @@ docker_signs:
       - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-armv6"
       - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}-armv7"
     artifacts: all
+    output: true
+  - id: manifest-signatures
+    cmd: cosign
+    # Sign the multi-arch manifests (versioned and latest) after images are built
+    args:
+      - sign
+      - --yes
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:{{ .Version }}"
+      - "ghcr.io/{{.Env.REPOSITORY_OWNER}}/{{.Env.REPOSITORY_NAME}}:latest"
+    artifacts: manifests
     output: true
 
 archives:
@@ -160,6 +171,14 @@ changelog:
       - "^ci:"
       - Merge pull request
       - Merge branch
+
+# SBOM generation (requires syft in PATH). Generates a CycloneDX JSON per archive.
+sboms:
+  - id: project-sbom
+    artifacts: archive
+    # Single document definition; GoReleaser expects a string mapping key: path format
+    documents:
+      - cyclonedx-json:sbom_{{ .ProjectName }}_{{ .Version }}.cdx.json
 
 release:
   github:

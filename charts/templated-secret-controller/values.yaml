@@ -45,6 +45,23 @@ metrics:
   # Configure the metrics endpoint
   bindAddress: ":8080"
 
+# Health and readiness probe configuration
+probes:
+  enabled: true
+  # Bind address for the dedicated probe server (flag --health-probe-bind-address)
+  bindAddress: ":8081"
+  port: 8081
+  livenessPath: /healthz
+  readinessPath: /readyz
+  # Timing configuration
+  livenessInitialDelaySeconds: 10
+  livenessPeriodSeconds: 20
+  readinessInitialDelaySeconds: 5
+  readinessPeriodSeconds: 10
+  timeoutSeconds: 3
+  livenessFailureThreshold: 3
+  readinessFailureThreshold: 3
+
 # Namespace configuration - SUPPORTED by controller via --namespace flag
 # The controller will only watch resources in this namespace
 # If not specified, the controller watches all namespaces
@@ -102,3 +119,8 @@ serviceMonitor:
   relabelings: []
 
 tolerations: []
+
+# Cross-namespace secret input feature gates
+crossNamespace:
+  enabled: false
+  warnOnUnwatched: true

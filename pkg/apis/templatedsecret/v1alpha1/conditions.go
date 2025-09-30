@@ -16,6 +16,9 @@ const (
 
 	// Invalid indicates that CRD's spec is not of valid form.
 	Invalid ConditionType = "Invalid"
+
+	// CrossNamespaceInputDegraded indicates some cross-namespace inputs may not receive update events (e.g., namespace not watched).
+	CrossNamespaceInputDegraded ConditionType = "CrossNamespaceInputDegraded"
 )
 
 type Condition struct {

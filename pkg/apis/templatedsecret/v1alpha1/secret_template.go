@@ -78,6 +78,13 @@ type InputResourceRef struct {
 	// The name of the input resource. This field can itself contain JSONPATH syntax to load the name dynamically
 	// from other input resources. For example this field could be set to a static value of "my-secret" or a dynamic valid of "$(.anotherinputresource.spec.name)".
 	Name string `json:"name"`
+	// Namespace of the input resource. If omitted the SecretTemplate's namespace is used. Cross-namespace
+	// access is currently only supported for core/v1 Secrets and is gated by the controller feature flag
+	// --enable-cross-namespace-secret-inputs. The referenced Secret must declare the annotation
+	// "templatedsecret.starstreak.dev/export-to-namespaces" whose value is a comma separated list of namespaces
+	// or a wildcard '*'.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // JSONPathTemplate contains templating information used to construct a new secret

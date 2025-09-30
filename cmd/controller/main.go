@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -44,26 +46,32 @@ var (
 	VersionSuffix = "-dev"
 	Commit        = "unknown"
 
-	log                        = logf.Log.WithName("ts")
-	ctrlNamespace              = ""
-	watchNamespaces            = ""
-	metricsBindAddress         = ""
-	enableLeaderElection       = false
-	leaderElectionResourceName = "templated-secret-controller-leader-election"
-	reconciliationInterval     = time.Hour
-	maxSecretAge               = 720 * time.Hour
-	logLevel                   = "info"
+	log                         = logf.Log.WithName("ts")
+	ctrlNamespace               = ""
+	watchNamespaces             = ""
+	metricsBindAddress          = ""
+	healthProbeBindAddress      = ""
+	enableLeaderElection        = false
+	leaderElectionResourceName  = "templated-secret-controller-leader-election"
+	reconciliationInterval      = time.Hour
+	maxSecretAge                = 720 * time.Hour
+	logLevel                    = "info"
+	enableCrossNamespaceSecrets = false
+	warnOnUnwatchedNamespaces   = true
 )
 
 func main() {
 	flag.StringVar(&ctrlNamespace, "namespace", "", "Namespace to watch (deprecated, use --watch-namespaces instead)")
 	flag.StringVar(&watchNamespaces, "watch-namespaces", "", "Comma-separated list of namespaces to watch (empty for all)")
 	flag.StringVar(&metricsBindAddress, "metrics-bind-address", ":8080", "Address for metrics server. If 0, then metrics server doesn't listen on any port.")
+	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address", ":8081", "Address for health probe server (liveness/readiness). If empty or 0, probes are disabled.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager")
 	flag.StringVar(&leaderElectionResourceName, "leader-election-id", "templated-secret-controller-leader-election", "Resource name for leader election")
 	flag.DurationVar(&reconciliationInterval, "reconciliation-interval", time.Hour, "How often to reconcile SecretTemplates")
 	flag.DurationVar(&maxSecretAge, "max-secret-age", 720*time.Hour, "Maximum age of a secret before forcing regeneration")
 	flag.StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	flag.BoolVar(&enableCrossNamespaceSecrets, "enable-cross-namespace-secret-inputs", false, "Enable experimental cross-namespace Secret inputs (requires source Secret export annotation)")
+	flag.BoolVar(&warnOnUnwatchedNamespaces, "warn-on-unwatched-cross-namespaces", true, "Emit warnings when a referenced cross-namespace Secret's namespace is not part of the watch set (may prevent update events)")
 	flag.Parse()
 
 	// Set up zap logger with configured log level
@@ -127,6 +135,7 @@ func main() {
 		Metrics: server.Options{
 			BindAddress: metricsBindAddress,
 		},
+		HealthProbeBindAddress: healthProbeBindAddress,
 		// Configure leader election
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        leaderElectionResourceName,
@@ -149,6 +158,11 @@ func main() {
 	// Set SecretTemplate's maximum exponential to reduce reconcile time for inputresource errors
 	rateLimiter := workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](100*time.Millisecond, 120*time.Second)
 	secretTemplateReconciler := generator.NewSecretTemplateReconciler(mgr, mgr.GetClient(), saLoader, tracker.NewTracker(), log.WithName("template"))
+	secretTemplateReconciler.SetCrossNamespaceConfig(generator.CrossNamespaceConfig{
+		Enabled:           enableCrossNamespaceSecrets,
+		WarnOnUnwatched:   warnOnUnwatchedNamespaces,
+		WatchedNamespaces: watchedNamespaceSet(namespaces),
+	})
 
 	// Pass reconciliation settings to the reconciler
 	secretTemplateReconciler.SetReconciliationSettings(reconciliationInterval, maxSecretAge)
@@ -159,6 +173,32 @@ func main() {
 	exitIfErr(entryLog, "registering", registerCtrlWithRateLimiter("template", mgr, secretTemplateReconciler, rateLimiter))
 
 	entryLog.Info("starting manager")
+
+	// Health check: basic ping
+	exitIfErr(entryLog, "adding health check", mgr.AddHealthzCheck("healthz", healthz.Ping))
+
+	// Readiness check: only ready once caches have synced
+	cacheSynced := false
+	// After start, we will flip this boolean once mgr.GetCache().WaitForCacheSync returns
+	readyCheck := func(req *http.Request) error {
+		if !cacheSynced {
+			return fmt.Errorf("caches not yet synced")
+		}
+		return nil
+	}
+	exitIfErr(entryLog, "adding ready check", mgr.AddReadyzCheck("readyz", readyCheck))
+
+	go func() {
+		// Wait for the manager to start and caches to sync
+		<-mgr.Elected()
+		entryLog.Info("waiting for informer caches to sync for readiness")
+		if ok := mgr.GetCache().WaitForCacheSync(context.Background()); !ok {
+			entryLog.Error(nil, "cache sync failed")
+			return
+		}
+		cacheSynced = true
+		entryLog.Info("cache sync complete; controller is ready")
+	}()
 
 	err = mgr.Start(signals.SetupSignalHandler())
 	exitIfErr(entryLog, "unable to run manager", err)
@@ -190,6 +230,18 @@ func registerCtrlWithRateLimiter(desc string, mgr manager.Manager, reconciler re
 	}
 
 	return nil
+}
+
+// watchedNamespaceSet converts the controller-runtime namespace config map into a simple set for quick membership tests.
+func watchedNamespaceSet(cfg map[string]cache.Config) map[string]struct{} {
+	if len(cfg) == 0 { // cluster-wide
+		return map[string]struct{}{}
+	}
+	set := make(map[string]struct{}, len(cfg))
+	for ns := range cfg {
+		set[ns] = struct{}{}
+	}
+	return set
 }
 
 func exitIfErr(entryLog logr.Logger, desc string, err error) {
