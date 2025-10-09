@@ -5,7 +5,7 @@ go 1.25.1
 require (
 	github.com/ghodss/yaml v1.0.0
 	github.com/go-logr/logr v1.4.3
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	k8s.io/api v0.34.1
 	k8s.io/apiextensions-apiserver v0.34.1
 	k8s.io/apimachinery v0.34.1
