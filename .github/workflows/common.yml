@@ -90,7 +90,7 @@ jobs:
           docker save $IMG:$TAG-$ARCH -o /tmp/docker-image/image-$ARCH.tar
 
       - name: Scan Docker image for vulnerabilities (Grype)
-        uses: anchore/scan-action@v6
+        uses: anchore/scan-action@v7
         with:
           image: "docker-archive:/tmp/docker-image/image-${{ matrix.arch }}.tar"
           fail-build: true
