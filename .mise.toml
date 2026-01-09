@@ -6,7 +6,7 @@ pipx_uvx = true
 ROOT_DIR = "{{config_root}}"
 
 [tools]
-cosign = '2.6.0'                     #renovate: packageName=sigstore/cosign
+cosign = '2.6.2'                     #renovate: packageName=sigstore/cosign
 jq = '1.7.1'                            #renovate: packageName=jqlang/jq
 kubectl = '1.34.1'                      #renovate: datasource=github-tags packageName=kubernetes/kubectl versioning=^kubernetes-(?<version>.*)$
 kubeconform = '0.6.7'                   #renovate: packageName=yannh/kubeconform
